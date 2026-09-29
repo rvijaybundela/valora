@@ -2436,10 +2436,23 @@ def pocketbase_headers():
     return headers
 
 
+# =========================================================
+# POCKETBASE BOOKING FETCH
+# =========================================================
+
 def get_pocketbase_bookings(
     appointment_date,
     stylist
 ):
+    """
+    Get confirmed bookings for the selected
+    date and stylist.
+
+    Date/time are stored as plain text:
+    booking_date = YYYY-MM-DD
+    start_time   = HH:MM
+    end_time     = HH:MM
+    """
 
     if not POCKETBASE_URL:
         raise RuntimeError(
@@ -2478,22 +2491,23 @@ def get_pocketbase_bookings(
     )
 
     print(
-        "POCKETBASE STATUS:",
+        "POCKETBASE AVAILABILITY STATUS:",
         response.status_code
     )
 
     print(
-        "POCKETBASE RESPONSE:",
+        "POCKETBASE AVAILABILITY RESPONSE:",
         response.text
     )
 
     response.raise_for_status()
 
-    return response.json().get(
+    data = response.json()
+
+    return data.get(
         "items",
         []
     )
-
 
 # =========================================================
 # APPOINTMENT TIME HELPERS
@@ -3676,7 +3690,7 @@ def book():
 
         "start_time": appointment_time,
 
-        "end_time": end_time,
+        "end_time": end_datetime.strftime("%H:%M"),
 
         "status": "confirmed",
 
@@ -3764,11 +3778,13 @@ def book():
             "stylist":
                 stylist,
 
-            "date":
-                appointment_date,
+            "booking_date": appointment_date,
 
-            "time":
-                appointment_time
+            "start_time": appointment_time,
+
+            "end_time": end_datetime.strftime("%H:%M"),
+
+            "status": "confirmed",
 
         }
 
