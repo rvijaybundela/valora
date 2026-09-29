@@ -51,9 +51,7 @@ RESEND_API_KEY = os.getenv(
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
     
-# =========================================================
-# BASE DIRECTORY
-# =========================================================
+#BASE DIRECTORY
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -1396,8 +1394,8 @@ INDEX_HTML = r"""
 
                         {% for stylist in stylists %}
 
-                        <option value="{{ stylist }}">
-                            {{ stylist }}
+                        <option value="{{ stylist.name }}">
+                            {{ stylist.name }}
                         </option>
 
                         {% endfor %}
@@ -2396,21 +2394,25 @@ def home():
 
 STYLISTS = [
     {
+        "id": "arjun",
         "name": "Arjun",
         "specialty": "Men's Grooming",
         "email": "swaminathji170@gmail.com"
     },
     {
+        "id": "karan",
         "name": "Karan",
         "specialty": "Men's Styling",
         "email": "ranvjbundela48@gmail.com"
     },
     {
+        "id": "riya",
         "name": "Riya",
         "specialty": "Women's Styling",
         "email": "swaminathji170@gmail.com"
     },
     {
+        "id": "meera",
         "name": "Meera",
         "specialty": "Hair & Beauty",
         "email": "ranvjbundela48@gmail.com"
@@ -2438,10 +2440,6 @@ def get_pocketbase_bookings(
     appointment_date,
     stylist
 ):
-    """
-    Get all bookings from PocketBase for the
-    selected date and stylist.
-    """
 
     if not POCKETBASE_URL:
         raise RuntimeError(
@@ -2449,8 +2447,9 @@ def get_pocketbase_bookings(
         )
 
     filter_value = (
-        f'date="{appointment_date}" '
-        f'&& stylist="{stylist}"'
+        f'booking_date="{appointment_date}" '
+        f'&& stylist="{stylist}" '
+        f'&& status="confirmed"'
     )
 
     params = {
@@ -2474,20 +2473,26 @@ def get_pocketbase_bookings(
     )
 
     print(
-        "POCKETBASE BOOKINGS STATUS:",
+        "POCKETBASE AVAILABILITY URL:",
+        response.url
+    )
+
+    print(
+        "POCKETBASE STATUS:",
         response.status_code
     )
 
     print(
-        "POCKETBASE BOOKINGS RESPONSE:",
+        "POCKETBASE RESPONSE:",
         response.text
     )
 
     response.raise_for_status()
 
-    data = response.json()
-
-    return data.get("items", [])
+    return response.json().get(
+        "items",
+        []
+    )
 
 
 # =========================================================
@@ -2526,102 +2531,109 @@ def get_appointment_times(
 
     return start_datetime, end_datetime
 
+# =========================================================
+# TIME CONVERSION
+# =========================================================
+
+def time_to_minutes(time_string):
+    """
+    Convert HH:MM into minutes from midnight.
+
+    Example:
+    10:00 -> 600
+    10:30 -> 630
+    19:30 -> 1170
+    """
+
+    hour, minute = map(
+        int,
+        time_string.strip().split(":")
+    )
+
+    return (
+        hour * 60
+        + minute
+    )
+
+
+def minutes_to_time(total_minutes):
+    """
+    Convert minutes from midnight into HH:MM.
+    """
+
+    hour = total_minutes // 60
+    minute = total_minutes % 60
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+# =========================================================
+# BOOKING OVERLAP CHECK
+# =========================================================
 
 def has_booking_overlap(
-    new_start,
-    new_end,
+    new_start_time,
+    new_end_time,
     existing_bookings
 ):
     """
-    Dynamic duration collision check.
+    Check whether the new appointment overlaps
+    with an existing confirmed booking.
 
-    Overlap formula:
-
-        StartA < EndB
-        AND
-        EndA > StartB
+    No datetime timezone conversion is used here.
+    Times are compared as simple HH:MM values.
     """
+
+    new_start = time_to_minutes(
+        new_start_time
+    )
+
+    new_end = time_to_minutes(
+        new_end_time
+    )
 
     for booking in existing_bookings:
 
-        existing_date = str(
-            booking.get("date", "")
-        ).strip()
-
-        existing_time = str(
-            booking.get("time", "")
-        ).strip()
-
-        existing_service = str(
-            booking.get("service", "")
-        ).strip()
-
-        if not existing_date or not existing_time:
-            continue
-
-        # -------------------------------------------------
-        # Get duration from service catalog
-        # -------------------------------------------------
-
-        existing_duration = SERVICE_DURATIONS.get(
-            existing_service
-        )
-
-        # -------------------------------------------------
-        # Fallback to PocketBase stored duration
-        # -------------------------------------------------
-
-        if existing_duration is None:
-
-            stored_duration = booking.get(
-                "duration_minutes"
+        existing_start_time = str(
+            booking.get(
+                "start_time",
+                ""
             )
+        ).strip()
 
-            # Backward compatibility with old records
-            if stored_duration is None:
-                stored_duration = booking.get(
-                    "service_duration"
-                )
+        existing_end_time = str(
+            booking.get(
+                "end_time",
+                ""
+            )
+        ).strip()
 
-            try:
-                existing_duration = int(
-                    stored_duration
-                )
-            except (
-                TypeError,
-                ValueError
-            ):
-                continue
-
-        # -------------------------------------------------
-        # Existing booking start
-        # -------------------------------------------------
+        # Ignore incomplete old records
+        if not (
+            existing_start_time
+            and existing_end_time
+        ):
+            continue
 
         try:
 
-            existing_start = datetime.strptime(
-                f"{existing_date} {existing_time}",
-                "%Y-%m-%d %H:%M"
+            existing_start = time_to_minutes(
+                existing_start_time
             )
 
-        except ValueError:
+            existing_end = time_to_minutes(
+                existing_end_time
+            )
+
+        except (ValueError, TypeError):
 
             continue
 
-        # -------------------------------------------------
-        # Existing booking end
-        # -------------------------------------------------
-
-        existing_end = (
-            existing_start
-            + timedelta(
-                minutes=int(existing_duration)
-            )
-        )
-
-        # -------------------------------------------------
-        # OVERLAP FORMULA
-        # -------------------------------------------------
+        # Overlap formula:
+        #
+        # New Start < Existing End
+        # AND
+        # New End > Existing Start
 
         if (
             new_start < existing_end
@@ -2631,7 +2643,6 @@ def has_booking_overlap(
             return True
 
     return False
-
 
 # =========================================================
 # COMMON BOOKING TIME VALIDATION
@@ -2873,170 +2884,143 @@ def test_pocketbase():
 @app.route("/check-slots", methods=["GET"])
 def check_slots():
 
-    appointment_date = request.args.get(
-        "date",
-        ""
-    ).strip()
+    try:
+        appointment_date = request.args.get("date", "").strip()
+        appointment_time = request.args.get("time", "").strip()
+        stylist = request.args.get("stylist", "").strip()
+        service = request.args.get("service", "").strip()
 
-    appointment_time = request.args.get(
-        "time",
-        ""
-    ).strip()
+        # -------------------------------------------------
+        # BASIC VALIDATION
+        # -------------------------------------------------
 
-    stylist = request.args.get(
-        "stylist",
-        ""
-    ).strip()
+        if not all([
+            appointment_date,
+            appointment_time,
+            stylist,
+            service
+        ]):
+            return jsonify({
+                "ok": False,
+                "available": False,
+                "message": "Please select date, time, service and stylist."
+            }), 400
 
-    service = request.args.get(
-        "service",
-        ""
-    ).strip()
+        # -------------------------------------------------
+        # SERVICE VALIDATION
+        # -------------------------------------------------
 
-    # -----------------------------------------------------
-    # BASIC VALIDATION
-    # -----------------------------------------------------
+        if service not in SERVICE_DURATIONS:
+            return jsonify({
+                "ok": False,
+                "available": False,
+                "message": "Invalid service selected."
+            }), 400
 
-    if not all([
-        appointment_date,
-        appointment_time,
-        stylist,
-        service
-    ]):
+        # -------------------------------------------------
+        # TIME VALIDATION
+        # -------------------------------------------------
 
-        return jsonify({
-
-            "ok": False,
-
-            "available": False,
-
-            "code": "MISSING_FIELDS",
-
-            "message": (
-                "Choose a date, time, stylist "
-                "and service."
+        valid, message, start_datetime, end_datetime = (
+            validate_booking_time(
+                appointment_date,
+                appointment_time,
+                service
             )
-
-        }), 400
-
-    # -----------------------------------------------------
-    # VALIDATE BOOKING TIME
-    # -----------------------------------------------------
-
-    (
-        valid,
-        validation_message,
-        new_start,
-        new_end
-    ) = validate_booking_time(
-
-        appointment_date,
-
-        appointment_time,
-
-        service
-    )
-
-    if not valid:
-
-        return jsonify({
-
-            "ok": False,
-
-            "available": False,
-
-            "code": "INVALID_TIME",
-
-            "message": validation_message
-
-        }), 409
-
-    service_duration = SERVICE_DURATIONS.get(
-        service
-    )
-
-    # -----------------------------------------------------
-    # POCKETBASE CONFIGURATION
-    # -----------------------------------------------------
-
-    if not POCKETBASE_URL:
-
-        print(
-            "ERROR: POCKETBASE_URL is empty."
         )
 
-        return jsonify({
+        if not valid:
+            return jsonify({
+                "ok": True,
+                "available": False,
+                "message": message
+            }), 200
 
-            "ok": False,
+        # -------------------------------------------------
+        # POCKETBASE CONFIGURATION
+        # -------------------------------------------------
 
-            "available": False,
+        if not POCKETBASE_URL:
+            print("ERROR: POCKETBASE_URL is empty.")
 
-            "code": "DATABASE_CONFIG",
+            return jsonify({
+                "ok": False,
+                "available": False,
+                "message": "PocketBase is not configured."
+            }), 500
 
-            "message": (
-                "Availability service is not configured."
-            )
+        # -------------------------------------------------
+        # GET EXISTING BOOKINGS
+        # -------------------------------------------------
 
-        }), 503
-
-    # -----------------------------------------------------
-    # GET EXISTING BOOKINGS
-    # -----------------------------------------------------
-
-    try:
-
-        existing_bookings = (
-            get_pocketbase_bookings(
-
+        try:
+            existing_bookings = get_pocketbase_bookings(
                 appointment_date,
-
                 stylist
             )
-        )
 
-    except requests.RequestException as error:
-
-        print(
-            "POCKETBASE AVAILABILITY ERROR:",
-            repr(error)
-        )
-
-        return jsonify({
-
-            "ok": False,
-
-            "available": False,
-
-            "code": "DATABASE_ERROR",
-
-            "message": (
-                "Availability could not be checked. "
-                "Please try again."
+        except requests.RequestException as error:
+            print(
+                "POCKETBASE AVAILABILITY ERROR:",
+                repr(error)
             )
 
-        }), 503
+            return jsonify({
+                "ok": False,
+                "available": False,
+                "message": "Availability could not be checked. Please try again."
+            }), 503
+
+        except Exception as error:
+            print(
+                "AVAILABILITY ERROR:",
+                repr(error)
+            )
+
+            return jsonify({
+                "ok": False,
+                "available": False,
+                "message": "Availability could not be checked. Please try again."
+            }), 503
+
+        # -------------------------------------------------
+        # CHECK OVERLAP
+        # -------------------------------------------------
+
+        if has_booking_overlap(
+            start_datetime,
+            end_datetime,
+            existing_bookings
+        ):
+            return jsonify({
+                "ok": True,
+                "available": False,
+                "message": "This time slot is already booked with the selected stylist."
+            }), 200
+
+        # -------------------------------------------------
+        # AVAILABLE
+        # -------------------------------------------------
+
+        return jsonify({
+            "ok": True,
+            "available": True,
+            "message": "This appointment slot is available.",
+            "duration_minutes": SERVICE_DURATIONS[service]
+        }), 200
 
     except Exception as error:
 
         print(
-            "AVAILABILITY ERROR:",
+            "CHECK SLOTS ERROR:",
             repr(error)
         )
 
         return jsonify({
-
             "ok": False,
-
             "available": False,
-
-            "code": "DATABASE_ERROR",
-
-            "message": (
-                "Availability could not be checked. "
-                "Please try again."
-            )
-
-        }), 503
+            "message": "Availability could not be checked. Please try again."
+        }), 500
 
     # -----------------------------------------------------
     # DYNAMIC COLLISION CHECK
@@ -3674,39 +3658,33 @@ def book():
 
         booking_data = {
 
-            "name":
-                name,
+        "name": name,
 
-            "phone":
-                phone,
+        "phone": phone,
 
-            "email":
-                email,
+        "email": email,
 
-            "service":
-                service,
+        "service": service,
 
-            "service_price":
-                service_price,
+        "service_price": service_price,
 
-            "duration_minutes":
-                service_duration,
+        "duration_minutes": service_duration,
 
-            "stylist":
-                stylist,
+        "stylist": stylist,
 
-            "date":
-                appointment_date,
+        "booking_date": appointment_date,
 
-            "time":
-                appointment_time,
+        "start_time": appointment_time,
 
-            "created_at":
-                datetime.now(
-                    INDIA_TIME_ZONE
-                ).isoformat()
+        "end_time": end_time,
 
-        }
+        "status": "confirmed",
+
+        "created_at":
+            datetime.now(
+                INDIA_TIME_ZONE
+            ).isoformat()
+    }
 
         # -------------------------------------------------
         # SAVE TO POCKETBASE
