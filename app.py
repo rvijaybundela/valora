@@ -667,6 +667,10 @@ def get_pocketbase_bookings(appointment_date, stylist):
     response = requests.get(
         records_url(), headers=pocketbase_headers(), params=params, timeout=15
     )
+    if not response.ok:
+        print("POCKETBASE AVAILABILITY FAILED:", response.status_code, response.url)
+        print("POCKETBASE RESPONSE:", response.text)
+
     response.raise_for_status()
     return response.json().get("items", [])
 
